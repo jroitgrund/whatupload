@@ -1,0 +1,59 @@
+#!/usr/bin/env ruby
+
+require 'io/console'
+require 'what_cd_upload'
+
+num_albums = ARGV.pop.to_i
+downloads = ARGV.pop
+
+what_cd_session = nil
+
+loop do
+  print "Username: "
+  username = gets.chomp
+  print "Password: "
+  password = STDIN.noecho(&:gets).chomp
+  puts "\n\n"
+
+  what_cd_session = WhatCDUpload::WhatCDSession.new(username, password)
+  break if what_cd_session.success
+  puts "Invalid username or password. Try again."
+end
+
+tracker_url = what_cd_session.tracker_url
+newest_urls = WhatCDUpload::BandcampDownloadInfo.get_newest_urls(num_albums)
+newest_urls.each do |url|
+  begin
+    bandcamp_download_info = WhatCDUpload::BandcampDownloadInfo.new(url)
+    if bandcamp_download_info.downloadable?
+      album_info = bandcamp_download_info.album_info
+      artist = album_info[:artist]
+      album = album_info[:album]
+      unless what_cd_session.uploaded?(artist, album)
+        torrents = bandcamp_download_info.urls.map do |bandcamp_format, zipfile_url|
+          name = "#{artist} - #{album} - #{bandcamp_format}".gsub('/', 'slash')
+          puts "Downloading #{name}"
+          target_directory = File.join(downloads, name)
+          torrent_filename = File.join(downloads, "#{name}.torrent")
+          unless Dir.exists?(target_directory)
+            Dir.mkdir(target_directory)
+            WhatCDUpload::Util.fetch_from_remote_zip(zipfile_url, target_directory)
+          end
+          unless File.exists?(torrent_filename)
+            WhatCDUpload::Util.make_torrent(tracker_url, target_directory, torrent_filename)
+          end
+
+          {
+            filename: torrent_filename
+          }.merge(WhatCDUpload::Util.bandcamp_format_to_what_cd_format_info(bandcamp_format))
+        end
+
+        what_cd_session.upload_torrent(album_info, torrents)
+      end
+    end
+  rescue
+    puts "An error occured while processing BandCamp url #{url}. Please submit a bug report on GitHub including the following stack trace:"
+    puts $!
+    puts $@
+  end
+end
